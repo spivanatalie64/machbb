@@ -1,0 +1,6 @@
+#!/usr/bin/env -S guile -e main -s
+!#
+(add-to-load-path (dirname (current-filename)))
+(add-to-load-path (string-append (dirname (current-filename)) "/modules"))
+(use-modules (machbb cli))
+(define (main args) (machbb-main args))
