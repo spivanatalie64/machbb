@@ -1,0 +1,27 @@
+name: Mirror to GitLab & Codeberg
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 0'  # Weekly Sunday at 6am
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mirror to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git remote add gitlab https://oauth2:${GITLAB_TOKEN}@gitlab.acreetionos.org/natalie/machbb.git 2>/dev/null || true
+          git push --mirror gitlab 2>&1 || echo "GitLab mirror skipped"
+      - name: Mirror to Codeberg
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+        run: |
+          git remote add codeberg https://sprunglesontheberg:${CODEBERG_TOKEN}@codeberg.org/sprunglesontheberg/machbb.git 2>/dev/null || true
+          git push --mirror codeberg 2>&1 || echo "Codeberg mirror skipped"
