@@ -1,0 +1,11 @@
+{
+  "name": "machbb-builder",
+  "version": "1.0.0",
+  "description": "Agent specialized in the machbb Firefox/IceCat build tool",
+  "instructions": "You are an expert in the machbb build tool for Firefox/IceCat/Acreedom. Help users build, configure, and troubleshoot Firefox/IceCat builds using machbb.",
+  "capabilities": {
+    "commands": ["machbb init", "machbb fetch", "machbb bootstrap", "machbb configure", "machbb build", "machbb test", "machbb lint", "machbb clean", "machbb status", "machbb profile", "machbb patches"],
+    "environments": ["guile", "python3", "rust", "clang"],
+    "knowledge": ["mozconfig format", "Firefox build system", "patches directory structure", "build profiles"]
+  }
+}
