@@ -2,50 +2,186 @@
   #:export (machbb-main))
 
 (use-modules (ice-9 getopt-long) (ice-9 format)
-             (machbb build) (machbb config) (machbb util)
+             (srfi srfi-1) (srfi srfi-8)
+             (machbb build) (machbb config)
+             (machbb util)
              (machbb bootstrap))
 
+(define (show-header)
+  (format #t "~%")
+  (format #t "  ~a — ~a~%" (bold "machbb") (dim "mach, but better"))
+  (format #t "  ~a~%" (dim "A modern build tool for Firefox/IceCat/Acreedom"))
+  (format #t "~%"))
+
 (define (show-help)
-  (format #t "Usage: machbb COMMAND [ARGS...]
-
-mach, but better.  A modern build tool for Firefox/IceCat/Acreedom.
-
-Commands:
-  init DIR        Initialize a project with mozconfig and patches/
-  bootstrap       Install build dependencies
-  configure       Configure the build
-  build [TARGET]  Build the project
-  package         Package the build output
-  run [ARGS]      Run the built browser
-  clean           Clean build artifacts
-  status          Show build status and environment
-  help            Show this help
-  version         Show version
-"))
+  (show-header)
+  (format #t "  ~a~%" (bold "Usage:"))
+  (format #t "    machbb COMMAND [OPTIONS...] [ARGS...]~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Core Commands:"))
+  (format #t "    init      Initialize a new build project~%")
+  (format #t "    fetch     Download Firefox/IceCat source code~%")
+  (format #t "    bootstrap Install build dependencies (system packages, Rust, etc.)~%")
+  (format #t "    configure Configure the build with mozconfig~%")
+  (format #t "    build     Build the project (pass -j N for parallel)~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Testing & Quality:"))
+  (format #t "    test      Run tests~%")
+  (format #t "    lint      Run linter~%")
+  (format #t "    check     Verify build configuration~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Package & Run:"))
+  (format #t "    package   Package the build output~%")
+  (format #t "    run       Run the built browser~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Maintenance:"))
+  (format #t "    clean     Remove build artifacts (--all for full clobber)~%")
+  (format #t "    status    Show build status and environment info~%")
+  (format #t "    env       Show/set build environment variables~%")
+  (format #t "    profile   List or apply build profiles~%")
+  (format #t "    patches   Manage patches (list, apply)~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Other:"))
+  (format #t "    help      Show this help message~%")
+  (format #t "    version   Show version information~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Options:"))
+  (format #t "    -j, --jobs N    Number of parallel jobs (default: ~a)~%" (cpu-count))
+  (format #t "    -q, --quiet     Suppress command output~%")
+  (format #t "    -n, --dry-run   Show what would be done without doing it~%")
+  (format #t "~%")
+  (format #t "  ~a~%" (bold "Examples:"))
+  (format #t "    machbb init my-project            Start a new project~%")
+  (format #t "    machbb fetch icecat               Download IceCat source~%")
+  (format #t "    machbb build -j 8                 Build with 8 cores~%")
+  (format #t "    machbb status                     Show build status~%")
+  (format #t "    machbb profile list               List build profiles~%")
+  (format #t "~%"))
 
 (define (show-version)
-  (format #t "machbb 0.1.0~%"))
+  (format #t "machbb 0.2.0~%")
+  (format #t "GNU Guile ~a~%" (run-line "guile --version | head -1" #:trim #t))
+  (format #t "Platform: ~a / ~a cores~%" (platform-arch) (cpu-count)))
 
-(define (dispatch cmd args)
-  (cond
-   ((string=? cmd "init")       (apply init args))
-   ((string=? cmd "bootstrap")  (bootstrap-run))
-   ((string=? cmd "configure")  (apply configure-build args))
-   ((string=? cmd "build")      (apply build args))
-   ((string=? cmd "package")    (package))
-   ((string=? cmd "run")        (apply run args))
-   ((string=? cmd "clean")      (apply clean-build args))
-   ((string=? cmd "status")     (status))
-   ((string=? cmd "help")       (show-help))
-   ((string=? cmd "version")    (show-version))
-   (else
-    (format (current-error-port) "machbb: unknown command ~s~%" cmd)
-    (show-help)
-    (exit 1))))
+(define (parse-global-args args)
+  (let loop ((args args) (jobs #f) (quiet #f) (dry-run #f) (remaining '()))
+    (cond
+     ((null? args) (values jobs quiet dry-run (reverse remaining)))
+     ((member (car args) '("-j" "--jobs"))
+      (if (pair? (cdr args))
+          (loop (cddr args) (string->number (cadr args)) quiet dry-run remaining)
+          (loop (cdr args) (cpu-count) quiet dry-run remaining)))
+     ((member (car args) '("-q" "--quiet"))
+      (loop (cdr args) jobs #t dry-run remaining))
+     ((member (car args) '("-n" "--dry-run"))
+      (loop (cdr args) jobs quiet #t remaining))
+     (else
+      (loop (cdr args) jobs quiet dry-run (append remaining (list (car args))))))))
+
+(define (dispatch cmd args jobs quiet dry-run)
+  (case (string->symbol cmd)
+    ;; Core
+    ((init)
+     (apply init args))
+    ((fetch)
+     (let ((type (if (pair? args) (car args) "firefox"))
+           (dest (if (and (pair? args) (> (length args) 1)) (list-ref args 1) ".")))
+       (fetch-source #:type type #:dest dest)))
+    ((bootstrap)
+     (cond
+      ((member "list" args) (bootstrap-list))
+      ((member "status" args) (bootstrap-status))
+      (else (bootstrap-run))))
+    ((configure)
+     (let* ((mozcfg (find-mozconfig))
+            (extra-options (filter (lambda (a) (not (string-prefix? "-" a))) args)))
+       (configure-build #:mozconfig mozcfg #:options extra-options)))
+    ((build)
+     (let ((targets (filter (lambda (a) (not (string-prefix? "-" a))) args)))
+       (build targets #:jobs jobs #:quiet quiet)))
+    ;; Test & quality
+    ((test)
+     (let ((suite (and (pair? args) (car args))))
+       (test-build #:suite suite)))
+    ((lint)
+     (lint-build #:fix (member "--fix" args)))
+    ((check)
+     (check-build))
+    ;; Package & Run
+    ((package)
+     (package))
+    ((run)
+     (browser-run args))
+    ;; Maintenance
+    ((clean)
+     (let ((all (or (member "--all" args) (member "-a" args)))
+           (dry (or dry-run (member "--dry-run" args) (member "-n" args))))
+       (clean-build #:all all #:dry-run dry)))
+    ((status)
+     (build-status))
+    ((env)
+     (let ((env-file (find-env-file)))
+       (if env-file
+           (begin
+             (format #t "~%  Build environment (~a):~%" env-file)
+             (for-each (lambda (kv)
+                         (format #t "    ~a=~a~%" (car kv) (cdr kv)))
+                       (read-env-file env-file))
+             (newline))
+           (begin
+             (format #t "~%  Current environment:~%")
+             (for-each (lambda (var)
+                         (let ((val (getenv var)))
+                           (when val
+                             (format #t "    ~a=~a~%" var val))))
+                       '("MOZCONFIG" "MOZ_OBJDIR" "MACHBB_PROFILE" "MACHBB_QUIET"))
+             (newline)))))
+    ((profile)
+     (cond
+      ((member "list" args) (list-profiles))
+      ((and (pair? args) (not (string-prefix? "-" (car args))))
+       (build-profile (car args)))
+      (else
+       (format #t "Usage: machbb profile [list|NAME]~%"))))
+    ((patches)
+     (let ((root (project-root)))
+       (if root
+           (let ((patches-dir (string-append root "/patches")))
+             (if (file-exists? patches-dir)
+                 (let ((patches (glob (string-append patches-dir "/*.patch"))))
+                   (if (null? patches)
+                       (info "No patches found")
+                       (begin
+                         (format #t "Patches (~a):~%" (length patches))
+                         (for-each (lambda (p)
+                                     (format #t "  ~a~%" (basename p)))
+                                   patches))))
+                 (info "No patches/ directory found")))
+           (fail "Not in a project root"))))
+    ;; Other
+    ((help)
+     (show-help))
+    ((version)
+     (show-version))
+    (else
+     (format (current-error-port) " ~a unknown command: ~a~%" (red "✗") cmd)
+     (show-help)
+     (exit 1))))
 
 (define (machbb-main args)
-  (if (< (length args) 2)
-      (begin (show-help) (exit 0)))
-  (let ((cmd (list-ref args 1))
-        (cmd-args (drop args 2)))
-    (dispatch cmd cmd-args)))
+  (call-with-current-continuation
+   (lambda (exit)
+     ;; Parse global options
+     (receive (jobs quiet dry-run cmd-args)
+         (parse-global-args (cdr args))  ; drop program name
+       (if (null? cmd-args)
+           (begin (show-help) (exit 0)))
+       (let ((cmd (car cmd-args))
+             (cmd-args (cdr cmd-args)))
+         ;; Handle errors gracefully
+         (catch #t
+           (lambda ()
+             (dispatch cmd cmd-args jobs quiet dry-run))
+           (lambda (key . args)
+             (format (current-error-port) " ~a Error: ~a~%" (red "✗") key)
+             (exit 1))))))))

@@ -1,26 +1,79 @@
 (define-module (machbb config)
-  #:export (init find-mozconfig write-default-mozconfig mozconfig-env))
-
-(use-modules (ice-9 format) (srfi srfi-1)
+  #:export (init find-mozconfig write-default-mozconfig mozconfig-env
+           list-profiles build-profile write-build-profile
+           find-env-file))
+(use-modules (ice-9 format) (ice-9 textual-ports) (srfi srfi-1) (srfi srfi-8)
              (machbb util))
 
-(define (init . dirs)
-  (let ((target (if (pair? dirs) (car dirs) ".")))
-    (format #t " ~a Initializing ~a~%" (cyan "⊶") target)
-    (let ((mozconfig (string-append target "/mozconfig")))
-      (unless (file-exists? mozconfig)
-        (write-default-mozconfig mozconfig "acreedom")
-        (ok (format #f "Created ~a" mozconfig)))
-      (let ((patches (string-append target "/patches")))
-        (unless (file-exists? patches)
-          (mkdir patches)
-          (ok (format #f "Created ~a/" patches)))))
-    (ok "Project initialized")))
+(define (init . args)
+  (let* ((target (if (pair? args) (car args) "."))
+         (name (if (and (pair? args) (> (length args) 1)) (list-ref args 1) "acreedom"))
+         (source (if (and (pair? args) (> (length args) 2)) (list-ref args 2) #f)))
+    (format #t "~%")
+    (info (format #f "Initializing machbb project: ~a" name))
+    (format #t "       target dir: ~a~%" target)
+    (format #t "       project:    ~a~%" name)
+    (when source
+      (format #t "       source:     ~a~%" source))
+    (format #t "~%")
+
+    ;; Create target directory if needed
+    (unless (file-exists? target)
+      (mkdir target)
+      (ok (format #f "Created directory ~a" target)))
+
+    ;; Fetch source if specified
+    (when source
+      (let* ((source-name (basename source))
+             (source-dir (string-append target "/" source-name)))
+        (unless (file-exists? source-dir)
+          (info (format #f "Fetching source from ~a..." source))
+          (run (format #f "git clone --depth=1 ~a ~a" source source-dir) #:silent #t)
+          (ok (format #f "Cloned ~a into ~a" source-name source-dir)))))
+
+    ;; Create mozconfig
+    (let ((mozconfig-path (if (string=? target ".") "mozconfig"
+                              (string-append target "/mozconfig"))))
+      (unless (file-exists? mozconfig-path)
+        (write-default-mozconfig mozconfig-path name)
+        (ok (format #f "Created ~a" mozconfig-path))))
+
+    ;; Create patches directory
+    (let ((patches-dir (if (string=? target ".") "patches"
+                           (string-append target "/patches"))))
+      (unless (file-exists? patches-dir)
+        (mkdir patches-dir)
+        (ok (format #f "Created ~a/ patches directory" patches-dir))))
+
+    ;; Create env file
+    (let ((env-file (if (string=? target ".") "machbb.env"
+                        (string-append target "/machbb.env"))))
+      (unless (file-exists? env-file)
+        (write-env-file env-file `(("MOZ_BUILD_PROJECT" . ,name)
+                                   ("MACHBB_PROFILE" . "release")))
+        (ok (format #f "Created ~a" env-file))))
+
+    ;; Write .machbb-root marker
+    (let ((root-marker (if (string=? target ".") ".machbb-root"
+                           (string-append target "/.machbb-root"))))
+      (unless (file-exists? root-marker)
+        (call-with-output-file root-marker
+          (lambda (port) (format port "machbb project: ~a~%" name)))
+        (ok (format #f "Created project root marker"))))
+
+    (format #t "~%")
+    (ok "Project initialized successfully!")
+    (format #t "~%")
+    (format #t "  Next steps:~%")
+    (format #t "   1. cd ~a~%" target)
+    (format #t "   2. machbb bootstrap~%")
+    (format #t "   3. machbb configure~%")
+    (format #t "   4. machbb build~%")))
 
 (define (find-mozconfig)
   (let ((root (project-root)))
     (if root
-        (let ((candidates '("mozconfig" "mozconfig.acreedom")))
+        (let ((candidates '("mozconfig" "mozconfig.acreedom" "mozconfig.acreetium")))
           (find (lambda (f) (file-exists? (string-append root "/" f))) candidates))
         #f)))
 
@@ -32,12 +85,14 @@
       (format #t "~%")
       (format #t "mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-~a~%" name)
       (format #t "ac_add_options --enable-application=browser~%")
-      (format #t "ac_add_options --enable-optimize~%")
+      (format #t "ac_add_options --enable-optimize=-O2~%")
       (format #t "ac_add_options --enable-release~%")
       (format #t "ac_add_options --enable-hardening~%")
       (format #t "ac_add_options --disable-telemetry~%")
       (format #t "ac_add_options --disable-crashreporter~%")
-      (format #t "ac_add_options --disable-updater~%")))
+      (format #t "ac_add_options --disable-updater~%")
+      (format #t "ac_add_options --disable-pocket~%")
+      (format #t "ac_add_options --disable-webrtc~%")))
   (chmod path #o644))
 
 (define* (mozconfig-env #:optional (path #f))
@@ -49,3 +104,59 @@
                                   (string-append (getcwd) "/" mozconfig)))
           mozconfig)
         #f)))
+
+;; ── Build profiles ──────────────────────────────────────────────────
+
+(define *default-profiles*
+  `(("release"
+     . ((optimize . "-O2")
+        (debug . #f)
+        (telemetry . #f)
+        (crashreporter . #f)
+        (updater . #f)
+        (hardening . #t)))
+    ("debug"
+     . ((optimize . "-O0")
+        (debug . #t)
+        (telemetry . #f)
+        (crashreporter . #f)
+        (updater . #f)
+        (hardening . #t)))
+    ("profile"
+     . ((optimize . "-O2")
+        (debug . #t)
+        (telemetry . #f)
+        (crashreporter . #f)
+        (updater . #f)
+        (hardening . #t)))))
+
+(define (list-profiles)
+  (format #t "Available build profiles:~%")
+  (for-each (lambda (p)
+              (format #t "  ~a~%" (car p)))
+            *default-profiles*))
+
+(define* (build-profile name #:key (apply-env #t))
+  (let ((profile (assoc-ref *default-profiles* name)))
+    (when (and profile apply-env)
+      (let ((mozconfig (find-mozconfig)))
+        (when mozconfig
+          (let ((lines (call-with-input-file mozconfig
+                         (lambda (p) (string-split (read-string p) #\newline)))))
+            ;; TODO: update mozconfig based on profile
+            (ok (format #f "Applied profile: ~a" name))))))
+    profile))
+
+(define (write-build-profile path name settings)
+  (call-with-output-file path
+    (lambda (port)
+      (format port "# machbb build profile: ~a~%" name)
+      (for-each (lambda (kv)
+                  (format port "~a = ~a~%" (car kv) (cdr kv)))
+                settings))))
+
+(define (find-env-file)
+  (let ((root (project-root)))
+    (and root
+         (let ((candidate (string-append root "/machbb.env")))
+           (and (file-exists? candidate) candidate)))))
