@@ -1,6 +1,8 @@
 # machbb — mach, but better
 
-Written in GNU Guile for software freedom.
+**Maintainer:** Natalie (AcreetionOS)  
+**Language:** GNU Guile — for software freedom.  
+**Part of:** [AcreetionOS](https://acreetionos.org)
 
 A modern replacement for Firefox's `mach` build tool, built for Acreedom (GNU IceCat fork).
 
@@ -25,4 +27,14 @@ Commands:
 - GNU Guile 3.0+
 - Firefox/IceCat source tree
 
-Part of the [AcreetionOS](https://acreetionos.org) project.
+## Train on yourself
+
+```bash
+./train.sh
+```
+
+Collects git history, writing samples, and shell history into a training dataset for fine-tuning a language model on your personal style.
+
+## About
+
+This repository was scaffolded with assistance from an AI agent. The agent's configuration, prompts, and operational knowledge are documented in `.opencode/agents/` — these files explain what the agent is, how it operates, and how to customize it for your own use. The agent is designed to be transparent about its role and capabilities.
